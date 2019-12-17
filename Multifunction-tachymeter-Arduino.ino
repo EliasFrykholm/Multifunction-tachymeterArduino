@@ -51,7 +51,7 @@ Last update: 05/23/2019
 // Calibration:
 ///////////////
 
-const byte PulsesPerRevolution = 2;  // Set how many pulses there are on each revolution. Default: 2.
+const byte PulsesPerRevolution = 1;  // Set how many pulses there are on each revolution. Default: 2.
 
 
 // If the period between pulses is too high, or even if the pulses stopped, then we would get stuck showing the
@@ -61,12 +61,12 @@ const byte PulsesPerRevolution = 2;  // Set how many pulses there are on each re
 // at very low RPM.
 // Setting a low value is going to allow the detection of stop situations faster, but it will prevent having low RPM readings.
 // The unit is in microseconds.
-const unsigned long ZeroTimeout = 100000;  // For high response time, a good value would be 100000.
+const unsigned long ZeroTimeout = 300000;  // For high response time, a good value would be 100000.
                                            // For reading very low RPM, a good value would be 300000.
 
 
 // Calibration for smoothing RPM:
-const byte numReadings = 2;  // Number of samples for smoothing. The higher, the more smoothing, but it's going to
+const byte numReadings = 3;  // Number of samples for smoothing. The higher, the more smoothing, but it's going to
                              // react slower to changes. 1 = no smoothing. Default: 2.
 
 
@@ -117,27 +117,60 @@ unsigned long readIndex;  // The index of the current reading.
 unsigned long total;  // The running total.
 unsigned long average;  // The RPM value after applying the smoothing.
 
+
+
+
+
+// OLED 0.96" Display:
+#include <Adafruit_GFX.h>  // Include core graphics library for the display.
+#include <Adafruit_SSD1306.h>  // Include Adafruit_SSD1306 library to drive the display.
+Adafruit_SSD1306 display(128, 32);  // Create display.
+#include <Fonts/FreeMonoBold12pt7b.h>  // Add a custom font.
+#include <avr/sleep.h>
+
 #define NR_OF_MODES 3
+#define BUTTON 3
+#define IR_PIN 5
+#define EXT_PIN 6
 uint8_t mode;
 uint8_t prevMode;
-
-
+long sleepTime;
+bool shownShutOff;
 
 void setup()  // Start of setup:
 {
-
-  mode=1;
-  prevMode=mode;
-  Serial.begin(9600);
-  pinMode(3, INPUT_PULLUP);
-  //attachInterrupt(digitalPinToInterrupt(3), buttonPressed, FALLING);
-attachInterrupt(digitalPinToInterrupt(2), Pulse_Event, RISING);  // Enable interruption pin 2 when going from LOW to HIGH.
+ 
+  mode=2;
+  prevMode=0;
+  set_sleep_mode (SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+  shownShutOff = false;
+  pinMode(2, INPUT);
+  pinMode(IR_PIN, INPUT);
+  pinMode(EXT_PIN, INPUT);
+  pinMode(BUTTON, INPUT_PULLUP);
+ 
   delay(1000);  // We sometimes take several readings of the period to average. Since we don't have any readings
                 // stored we need a high enough value in micros() so if divided is not going to give negative values.
                 // The delay allows the micros() to be high enough for the first few cycles.
 
 
-}  
+
+
+
+  // OLED 0.96" Display:
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // Initialize display with the I2C address of 0x3C.
+  display.clearDisplay();  // Clear the buffer.
+  display.setTextColor(WHITE);  // Set color of the text to white.
+  display.setRotation(0);  // Set orientation. Goes from 0, 1, 2 or 3.
+  display.setTextWrap(false);  // By default, long lines of text are set to automatically “wrap” back to the leftmost column.
+                               // To override this behavior (so text will run off the right side of the display - useful for
+                               // scrolling marquee effects), use setTextWrap(false). The normal wrapping behavior is restored
+                               // with setTextWrap(true).
+  display.dim(0);  // Set brightness (0 is maximum and 1 is a little dim).
+  sleepTime = millis();
+
+}  // End of setup.
 
 
 
@@ -145,43 +178,102 @@ attachInterrupt(digitalPinToInterrupt(2), Pulse_Event, RISING);  // Enable inter
 
 void loop()  // Start of loop:
 {
+    Is_Button_Pressed();
 
-  if(mode != prevMode){
-    if(mode == 1){
+    if(millis() - sleepTime > 40000){
+          display.clearDisplay();
+          display.setFont(&FreeMonoBold12pt7b);  // Set a custom font.
+          display.setTextSize(0);  // Set text size. We are using a custom font so you should always use the text size of 0.
+          display.setCursor(0, 12);  // (x,y).
+          display.print("Turning");  // Text or value to print.
+          display.setCursor(30, 30);  // (x,y).
+          display.print("off");  // Text or value to print.
+          //displayMode
+          display.display();
+      } else {
+      if(mode != prevMode){
+        display.clearDisplay();
+        display.setFont(&FreeMonoBold12pt7b);  // Set a custom font.
+        display.setTextSize(0);  // Set text size. We are using a custom font so you should always use the text size of 0.
+        display.setCursor(0, 12);  // (x,y).
+        display.print("Mode: ");  // Text or value to print.
+        display.setCursor(0, 30);
+
+        switch(mode){
+          case 1:
+            attachInterrupt(digitalPinToInterrupt(2), Pulse_Event, RISING);  // Enable interruption pin 2 when going from LOW to HIGH.
+            display.print("Magnet");  // Text or value to print.
+            break;
+          case 2:
+            attachPCINT(digitalPinToPCINT(IR_PIN), Pulse_Event, RISING);
+            display.print("IR");  // Text or value to print.
+            break;
+          case 3:
+            attachPCINT(digitalPinToPCINT(EXT_PIN), Pulse_Event, RISING);
+            display.print("External");  // Text or value to print.
+            break;
+          }
+            display.display();
+            delay(800);
+            prevMode = mode;
+        }
+
+        Hall_Effect();
+      }
+      if(millis() - sleepTime > 45000){
+        // BODS must be set to one and BODSE must be set to zero within four clock cycles. This sets
+        // the MCU Control Register (MCUCR)
+        MCUCR = bit (BODS) | bit (BODSE);
+
+        // The BODS bit is automatically cleared after three clock cycles so we better get on with it
+        MCUCR = bit (BODS);
+
+        noInterrupts();
+        attachInterrupt(digitalPinToInterrupt(BUTTON), Wake_Up, FALLING);
+
+        interrupts();
+        display.clearDisplay();
+        display.display();        
+        sleep_cpu();
+      }
+    
+    /*
+    while(digitalRead(BUTTON) == LOW){
+      delay(10);
       
     }
-    Serial.println("Mode changed");
-    //displayMode
-    delay(500);
-    prevMode = mode;
-  }
+    */
 
-  switch(mode){
-    case 1:
-    hallEffectMeasurement();
-    break;
-    case 2:
-    irMeasurement();
-    break;
-  }
 
 }  // End of loop.
 
-
-void buttonPressed(){
-  detachInterrupt(digitalPinToInterrupt(2));
-  mode += 1;
-  if(mode > NR_OF_MODES || mode == 1){
-    mode = 1;
-  }
-
-  // display mode nr
+void Wake_Up(){
+  sleep_disable();
+  sleepTime = millis();
+  // Detach the interrupt that brought us out of sleep
+  detachInterrupt(digitalPinToInterrupt(BUTTON));
 }
 
-void hallEffectMeasurement(){
-  while(true){
-     LastTimeCycleMeasure = LastTimeWeMeasured;  // Store the LastTimeWeMeasured in a variable.
-  CurrentMicros = micros();
+void Is_Button_Pressed(){
+  if(digitalRead(BUTTON) == LOW){
+    sleepTime = millis();
+    detachInterrupt(digitalPinToInterrupt(2));
+    detachPCINT(digitalPinToPCINT(IR_PIN));
+    detachPCINT(digitalPinToPCINT(EXT_PIN));
+    mode += 1;
+    if(mode > NR_OF_MODES || mode == 1){
+      mode = 1;
+    }
+  }
+
+}
+
+void Hall_Effect(){
+  // The following is going to store the two values that might change in the middle of the cycle.
+  // We are going to do math and functions with those values and they can create glitches if they change in the
+  // middle of the cycle.
+  LastTimeCycleMeasure = LastTimeWeMeasured;  // Store the LastTimeWeMeasured in a variable.
+  CurrentMicros = micros();  // Store the micros() in a variable.
 
 
 
@@ -253,7 +345,9 @@ void hallEffectMeasurement(){
   // Calculate the average:
   average = total / numReadings;  // The average value it's the smoothed result.
 
-Serial.println(average);
+
+
+
 
 /*
   // Print information on the serial monitor:
@@ -271,16 +365,36 @@ Serial.println(average);
   Serial.println(average);
 */
 
+
+
+
+
+
+  
+  display.clearDisplay();  // Clear the display so we can refresh.
+  display.setFont(&FreeMonoBold12pt7b);  // Set a custom font.
+  display.setTextSize(0);  // Set text size. We are using a custom font so you should always use the text size of 0.
+  display.setCursor(0, 12);  // (x,y).
+  display.println("RPM:");  // Text or value to print.
+
+  // Print variable with right alignment:
+  display.setCursor(0, 30);  // (x,y).
+  display.println(average);  // Text or value to print.
+
+  // Print a comma for the thousands separator:
+  if(average > 999)  // If value is above 999:
+  {
+    // Draw line (to show a comma):
+    //display.drawLine(63, 60, 61, 65, WHITE);  // Draw line (x0,y0,x1,y1,color).
   }
+
+  display.display();  // Print everything we set previously.
 }
 
-void irMeasurement(){
-  
-}
  
 void Pulse_Event()  // The interrupt runs this to calculate the period between pulses:
 {
-  Serial.println("hall");
+
   PeriodBetweenPulses = micros() - LastTimeWeMeasured;  // Current "micros" minus the old "micros" when the last pulse happens.
                                                         // This will result with the period (microseconds) between both pulses.
                                                         // The way is made, the overflow of the "micros" is not going to cause any issue.
