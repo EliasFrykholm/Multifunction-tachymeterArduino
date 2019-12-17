@@ -394,7 +394,7 @@ void Hall_Effect(){
  
 void Pulse_Event()  // The interrupt runs this to calculate the period between pulses:
 {
-
+  sleepTime = millis();
   PeriodBetweenPulses = micros() - LastTimeWeMeasured;  // Current "micros" minus the old "micros" when the last pulse happens.
                                                         // This will result with the period (microseconds) between both pulses.
                                                         // The way is made, the overflow of the "micros" is not going to cause any issue.
